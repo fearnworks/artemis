@@ -55,6 +55,7 @@ export interface ArtemisConfig {
   dgraphAuth: DgraphAuthConfig;
   hsvaiDgraphSyncAuth: DgraphAuthConfig;
   hsvaiDgraphQueryAuth: DgraphAuthConfig;
+  memoryInject: boolean;
   sqlitePath: string;
   logLevel: LogLevel;
 }
@@ -267,6 +268,11 @@ export function parseConfig(
     dgraphAuth: dgraphAuthConfig,
     hsvaiDgraphSyncAuth,
     hsvaiDgraphQueryAuth,
+    memoryInject: parseBoolean(
+      valueOrDefault(env, "MEMORY_INJECT", "false"),
+      "MEMORY_INJECT",
+      false
+    ),
     sqlitePath: valueOrDefault(env, "SQLITE_PATH", DEFAULT_SQLITE_PATH),
     logLevel: parseLogLevel(valueOrDefault(env, "LOG_LEVEL", "info"))
   };
