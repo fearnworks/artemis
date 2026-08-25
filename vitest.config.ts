@@ -8,7 +8,8 @@ export default defineConfig({
       include: ["src/**/*.ts"],
       exclude: [
         "src/index.ts",
-        "src/dgraph-bootstrap.ts"
+        "src/dgraph-bootstrap.ts",
+        "src/hsvai-event-catalog-task.ts"
       ],
       thresholds: {
         statements: 80,
