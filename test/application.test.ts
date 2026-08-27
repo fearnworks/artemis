@@ -51,7 +51,8 @@ describe("ArtemisApplication", () => {
       channelIds: ["channel-one", "channel-two"],
       model: "model",
       provider: "test-provider",
-      personaProfile: "artemis"
+      personaProfile: "artemis",
+      imageInput: false
     });
 
     application.stop();

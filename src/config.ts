@@ -31,6 +31,7 @@ export interface ModelProviderConfig {
   contextWindow: number;
   maxTokens: number;
   supportsDeveloperRole: boolean;
+  supportsImageInput: boolean;
 }
 
 export interface DgraphAuthConfig {
@@ -134,6 +135,21 @@ function configuredBoolean(
   return value;
 }
 
+function configuredOptionalBoolean(
+  config: Record<string, unknown>,
+  name: keyof ModelProviderDefinition,
+  defaultValue: boolean
+): boolean {
+  const value = config[name];
+  if (value === undefined) {
+    return defaultValue;
+  }
+  if (typeof value !== "boolean") {
+    throw new Error(`Invalid model configuration: ${name} must be a boolean`);
+  }
+  return value;
+}
+
 function configuredPositiveInteger(
   config: Record<string, unknown>,
   name: keyof ModelProviderDefinition
@@ -178,7 +194,8 @@ export function parseModelConfig(
     ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
     contextWindow: configuredPositiveInteger(config, "contextWindow"),
     maxTokens: configuredPositiveInteger(config, "maxTokens"),
-    supportsDeveloperRole: configuredBoolean(config, "supportsDeveloperRole")
+    supportsDeveloperRole: configuredBoolean(config, "supportsDeveloperRole"),
+    supportsImageInput: configuredOptionalBoolean(config, "supportsImageInput", false)
   };
 }
 
@@ -257,7 +274,8 @@ export function parseConfig(
           reasoningEffort: "medium",
           contextWindow: 1_048_576,
           maxTokens: 65_536,
-          supportsDeveloperRole: false
+          supportsDeveloperRole: false,
+          supportsImageInput: false
         }, valueOrDefault(env, "OLLAMA_API_KEY", "ollama"))
       : parseModelConfig(modelConfig, valueOrDefault(env, "MODEL_API_KEY", "local")),
     persona: resolvePersonaProfile(env.PERSONA_PROFILE),

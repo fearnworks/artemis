@@ -62,6 +62,12 @@ reasoning-effort parameter. Artemis passes a selected effort when creating every
 PI session and registers the selected extended `xhigh` or `max` level for custom
 models. The legacy Ollama workflow explicitly selects `medium`.
 
+A provider that accepts image content may also set `supportsImageInput: true`.
+The field is optional and defaults to `false`, so existing provider files keep
+the previous text-only registration (`input: ["text"]`). When enabled, PI
+registers the model with `input: ["text", "image"]` so image content reaches
+the provider; see [Image input](image-input.md) for the intake contract.
+
 `MODEL_API_KEY` remains outside the JSON file and is attached to model discovery
 and completion requests. An empty API key sends no authorization header. In the
 legacy Ollama workflow, the default `OLLAMA_API_KEY=ollama` value remains a
@@ -128,7 +134,7 @@ and sanitized before entering model context.
 
 ## Verification
 
-- `test/config.test.ts` covers defaults, JSON loading, reasoning effort, overrides, and validation.
+- `test/config.test.ts` covers defaults, JSON loading, reasoning effort, image-input support, overrides, and validation.
 - `test/pi-gateway.test.ts` covers dynamic provider registration, authentication,
   configured reasoning effort, model lookup, native session creation, PI session cutover,
   and health failure.

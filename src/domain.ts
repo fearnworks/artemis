@@ -24,6 +24,14 @@ export interface SourceMessage {
   threadId?: string;
 }
 
+export interface InboundImage {
+  id: string;
+  url: string;
+  contentType: string;
+  byteSize: number;
+  dataBase64: string;
+}
+
 export interface InboundMessage extends SourceMessage {
   role: "user";
   guildId?: string;
@@ -32,6 +40,8 @@ export interface InboundMessage extends SourceMessage {
   isBot: boolean;
   mentionsBot: boolean;
   repliesToBot: boolean;
+  /** Present only when the triggering message carried image attachments and image input is enabled. */
+  images?: () => Promise<readonly InboundImage[]>;
   loadThread?: () => Promise<SourceMessage[]>;
   responseIndicator?: ResponseIndicator;
 }
@@ -73,6 +83,11 @@ export interface IncomingMessageRecord {
   threadId?: string;
 }
 
+export interface GenerationImage {
+  mimeType: string;
+  dataBase64: string;
+}
+
 export interface PiGenerationInput {
   logicalSessionId: string;
   conversationKey: string;
@@ -80,6 +95,7 @@ export interface PiGenerationInput {
   sourceMessageId: string;
   authorId: string;
   prompt: string;
+  images?: readonly GenerationImage[];
 }
 
 export interface PiSessionEntryRecord {

@@ -1,5 +1,6 @@
 import {
   Client,
+  Collection,
   Events,
   GatewayIntentBits,
   MessageFlags,
@@ -11,7 +12,7 @@ import {
   type ThreadChannel
 } from "discord.js";
 import type { ConversationService } from "./conversation-service.js";
-import type { ChannelRef, InboundMessage, Logger, ResponseIndicator, SourceMessage } from "./domain.js";
+import type { ChannelRef, InboundImage, InboundMessage, Logger, ResponseIndicator, SourceMessage } from "./domain.js";
 import { safeError } from "./logger.js";
 
 const DISCORD_MESSAGE_LIMIT = 2_000;
@@ -19,6 +20,20 @@ const TYPING_REFRESH_INTERVAL_MS = 5_000;
 const CLEAR_SESSION_SUCCESS =
   "Session cleared. I'll start fresh on the next message in this channel.";
 const CLEAR_SESSION_NOTHING = "No active session to clear.";
+
+/**
+ * Image-input intake limits enforced when the configured model declares image
+ * support (`supportsImageInput`). Attachments outside these limits fail the
+ * generation loudly instead of silently degrading what the model can see.
+ */
+export const IMAGE_INPUT_MAX_BYTES = 10 * 1024 * 1024;
+export const IMAGE_INPUT_MAX_COUNT = 4;
+export const IMAGE_INPUT_CONTENT_TYPES: ReadonlySet<string> = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/gif"
+]);
 
 const MS_PER_SECOND = 1_000;
 const MS_PER_MINUTE = 60_000;
@@ -150,6 +165,53 @@ export function toInboundMessage(message: Message, selfUserId: string | undefine
   };
 }
 
+/**
+ * Download the message's image attachments as base64 payloads for model input.
+ * Non-image attachments are ignored. Image attachments that violate the
+ * content-type or size limits, or that fail to download, raise an error so the
+ * generation fails loudly rather than answering without the attached context.
+ */
+export async function collectImageAttachments(
+  message: Message,
+  fetchImplementation: typeof fetch
+): Promise<InboundImage[]> {
+  const images: InboundImage[] = [];
+  for (const attachment of message.attachments.values()) {
+    if (!attachment.contentType?.startsWith("image/")) {
+      continue;
+    }
+    if (!IMAGE_INPUT_CONTENT_TYPES.has(attachment.contentType)) {
+      throw new Error(`Unsupported image attachment content type: ${attachment.contentType}`);
+    }
+    if (images.length >= IMAGE_INPUT_MAX_COUNT) {
+      throw new Error(`Too many image attachments: limit is ${IMAGE_INPUT_MAX_COUNT}`);
+    }
+    if (attachment.size > IMAGE_INPUT_MAX_BYTES) {
+      throw new Error(
+        `Image attachment exceeds the ${IMAGE_INPUT_MAX_BYTES} byte limit: ${attachment.size}`
+      );
+    }
+    const response = await fetchImplementation(attachment.url);
+    if (!response.ok) {
+      throw new Error(`Image attachment download failed with status ${response.status}`);
+    }
+    const data = Buffer.from(await response.arrayBuffer());
+    if (data.byteLength > IMAGE_INPUT_MAX_BYTES) {
+      throw new Error(
+        `Image attachment exceeds the ${IMAGE_INPUT_MAX_BYTES} byte limit: ${data.byteLength}`
+      );
+    }
+    images.push({
+      id: attachment.id,
+      url: attachment.url,
+      contentType: attachment.contentType,
+      byteSize: data.byteLength,
+      dataBase64: data.toString("base64")
+    });
+  }
+  return images;
+}
+
 export function createTypingIndicator(
   message: Message,
   logger: Logger,
@@ -215,6 +277,9 @@ export interface DiscordGatewayOptions {
   userIds: readonly string[];
   suppressEmbeds?: boolean;
   embedsAllowedChannelIds?: readonly string[];
+  /** Collect image attachments as model input. Requires a model that declares image support. */
+  imageInput?: boolean;
+  fetchImplementation?: typeof fetch;
   startedAt?: number;
   now?: () => number;
   /**
@@ -231,6 +296,8 @@ export class DiscordGateway {
   private readonly allowedUserIds: ReadonlySet<string>;
   private readonly suppressEmbeds: boolean;
   private readonly embedsAllowedChannelIds: ReadonlySet<string>;
+  private readonly imageInput: boolean;
+  private readonly fetchImplementation: typeof fetch;
   private readonly startedAt: number;
   private readonly now: () => number;
 
@@ -252,6 +319,8 @@ export class DiscordGateway {
     this.allowedUserIds = new Set(options.userIds);
     this.suppressEmbeds = options.suppressEmbeds ?? true;
     this.embedsAllowedChannelIds = new Set(options.embedsAllowedChannelIds ?? []);
+    this.imageInput = options.imageInput ?? false;
+    this.fetchImplementation = options.fetchImplementation ?? globalThis.fetch.bind(globalThis);
     this.startedAt = options.startedAt ?? Date.now();
     this.now = options.now ?? (() => Date.now());
   }
@@ -318,6 +387,9 @@ export class DiscordGateway {
   }
 
   public async handleMessage(message: Message): Promise<void> {
+    const imageAttachments = [...(message.attachments ?? new Collection()).values()].filter(
+      (attachment) => attachment.contentType?.startsWith("image/")
+    );
     this.logger.audit("discord_message_received", {
       discordMessageId: message.id,
       guildId: message.guildId,
@@ -327,10 +399,22 @@ export class DiscordGateway {
       authorName: displayName(message),
       isBot: message.author.bot,
       content: message.content,
+      ...(imageAttachments.length > 0
+        ? {
+            imageAttachments: imageAttachments.map((attachment) => ({
+              id: attachment.id,
+              contentType: attachment.contentType,
+              size: attachment.size
+            }))
+          }
+        : {}),
       createdAt: message.createdAt.toISOString()
     });
     const inbound: InboundMessage = {
       ...toInboundMessage(message, this.client.user?.id),
+      ...(this.imageInput && imageAttachments.length > 0
+        ? { images: () => collectImageAttachments(message, this.fetchImplementation) }
+        : {}),
       responseIndicator: createTypingIndicator(message, this.logger)
     };
     this.conversations.logMessage(inbound);
@@ -443,4 +527,4 @@ export class DiscordGateway {
   }
 }
 
-export const discordInternals = { toSourceMessage };
+export const discordInternals = { collectImageAttachments, toSourceMessage };
