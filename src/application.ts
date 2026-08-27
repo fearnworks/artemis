@@ -49,6 +49,7 @@ export class ArtemisApplication {
           userIds: config.discordUserIds,
           suppressEmbeds: config.discordSuppressEmbeds,
           embedsAllowedChannelIds: config.discordEmbedsAllowedChannelIds,
+          imageInput: config.model.supportsImageInput,
           onBotIdentity: (name) => this.pi.setBotDisplayName(name)
         },
         conversations,
@@ -62,7 +63,8 @@ export class ArtemisApplication {
       channelIds: this.config.discordAllowedChannelIds,
       model: this.config.model.modelId,
       provider: this.config.model.providerId,
-      personaProfile: this.config.persona.id
+      personaProfile: this.config.persona.id,
+      imageInput: this.config.model.supportsImageInput
     });
     try {
       await this.pi.checkHealth();

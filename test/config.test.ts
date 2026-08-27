@@ -60,7 +60,8 @@ describe("parseConfig", () => {
         reasoningEffort: "medium",
         contextWindow: 1_048_576,
         maxTokens: 65_536,
-        supportsDeveloperRole: false
+        supportsDeveloperRole: false,
+        supportsImageInput: false
       },
       persona: GENERIC_PROFILE,
       githubToken: "",
@@ -228,6 +229,23 @@ describe("parseConfig", () => {
       { ...providerDefinition, reasoningEffort: undefined }
     );
     expect(result.model.reasoningEffort).toBeUndefined();
+  });
+
+  it("defaults image input to disabled, accepts explicit values, and validates its type", () => {
+    const omitted = parseConfig({ DISCORD_TOKEN: "token" }, { ...providerDefinition });
+    expect(omitted.model.supportsImageInput).toBe(false);
+    expect(
+      parseConfig({ DISCORD_TOKEN: "token" }, { ...providerDefinition, supportsImageInput: true })
+        .model.supportsImageInput
+    ).toBe(true);
+    expect(
+      parseConfig({ DISCORD_TOKEN: "token" }, { ...providerDefinition, supportsImageInput: false })
+        .model.supportsImageInput
+    ).toBe(false);
+    expect(() => parseConfig(
+      { DISCORD_TOKEN: "token" },
+      { ...providerDefinition, supportsImageInput: "yes" }
+    )).toThrow("supportsImageInput must be a boolean");
   });
 
   it("rejects invalid model field types", () => {

@@ -113,6 +113,13 @@ Its presence enables PI reasoning-effort compatibility and passes the selected
 value to every session. Omit it for providers that do not support the parameter.
 The default Ollama workflow uses `medium`.
 
+Providers that accept image content may also define `supportsImageInput` as a
+boolean, defaulting to `false`. When enabled, Artemis collects the triggering
+message's image attachments (at most 4 per message, at most 10 MiB per image,
+PNG/JPEG/WebP/GIF only), submits them to the model as image content, and lets a
+message consist of images with no text. Set it only for providers that actually
+accept image content; leave it unset for text-only models.
+
 Artemis intentionally does not ship a concrete alternate-provider file.
 Deployment repositories should own those values and mount the file through a
 Compose override or another runtime secret/configuration mechanism.

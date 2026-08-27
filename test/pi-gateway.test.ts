@@ -414,6 +414,76 @@ describe("PiSdkGateway", () => {
     expect(mocks.createAgentSession.mock.calls[0]?.[0]).not.toHaveProperty("thinkingLevel");
   });
 
+  it("advertises image input only when the provider declares it", async () => {
+    const textOnly = new PiSdkGateway(
+      artemisGatewayConfig(modelConfig({ baseUrl: "http://inference/v1", modelId: "model" })),
+      createSessionStore(),
+      healthyFetch()
+    );
+    await textOnly.checkHealth();
+    expect(mocks.runtime.registerProvider).toHaveBeenCalledWith(
+      "test-provider",
+      expect.objectContaining({
+        models: [expect.objectContaining({ input: ["text"] })]
+      })
+    );
+
+    mocks.runtime.registerProvider.mockClear();
+    const imageInput = new PiSdkGateway(
+      artemisGatewayConfig(
+        modelConfig({ baseUrl: "http://inference/v1", modelId: "model", supportsImageInput: true })
+      ),
+      createSessionStore(),
+      healthyFetch()
+    );
+    await imageInput.checkHealth();
+    expect(mocks.runtime.registerProvider).toHaveBeenCalledWith(
+      "test-provider",
+      expect.objectContaining({
+        models: [expect.objectContaining({ input: ["text", "image"] })]
+      })
+    );
+  });
+
+  it("passes image attachments to the PI prompt as image content", async () => {
+    const gateway = new PiSdkGateway(
+      artemisGatewayConfig(modelConfig({ baseUrl: "http://inference/v1", modelId: "model" })),
+      createSessionStore(),
+      healthyFetch()
+    );
+    await gateway.checkHealth();
+    await gateway.generate(
+      generationInput({
+        images: [
+          { mimeType: "image/png", dataBase64: "AAAA" },
+          { mimeType: "image/jpeg", dataBase64: "BBBB" }
+        ]
+      })
+    );
+    expect(mocks.session.prompt).toHaveBeenCalledWith("prompt", {
+      expandPromptTemplates: false,
+      source: "rpc",
+      images: [
+        { type: "image", data: "AAAA", mimeType: "image/png" },
+        { type: "image", data: "BBBB", mimeType: "image/jpeg" }
+      ]
+    });
+  });
+
+  it("omits image options when no images are supplied", async () => {
+    const gateway = new PiSdkGateway(
+      artemisGatewayConfig(modelConfig({ baseUrl: "http://inference/v1", modelId: "model" })),
+      createSessionStore(),
+      healthyFetch()
+    );
+    await gateway.checkHealth();
+    await gateway.generate(generationInput());
+    expect(mocks.session.prompt).toHaveBeenCalledWith("prompt", {
+      expandPromptTemplates: false,
+      source: "rpc"
+    });
+  });
+
   it("preserves unauthenticated access for the legacy Ollama placeholder", async () => {
     const fetchMock = healthyFetch();
     const gateway = new PiSdkGateway(

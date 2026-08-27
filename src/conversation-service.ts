@@ -82,7 +82,7 @@ export class ConversationService {
   public async handleMessage(message: InboundMessage): Promise<string | null> {
     if (
       message.isBot ||
-      !message.content.trim() ||
+      (!message.content.trim() && !message.images) ||
       (message.guildId !== undefined &&
         !this.allowedChannelIds.has(message.parentChannelId ?? message.channelId))
     ) {
@@ -125,16 +125,29 @@ export class ConversationService {
           : [...sourceMessages, message];
         this.repository.insertSourceMessages(session.id, normalized);
 
-        const prompt = message.loadThread
-          ? formatThreadSnapshot(normalized)
-          : formatDiscordMessage(message);
+        const messageImages = message.images ? await message.images() : [];
+        const prompt =
+          (message.loadThread
+            ? formatThreadSnapshot(normalized)
+            : formatDiscordMessage(message)) +
+          (messageImages.length > 0
+            ? `\n\nThe newest Discord message includes ${messageImages.length} image attachment(s), provided to you as image content.`
+            : "");
         const result = await this.pi.generate({
           logicalSessionId: session.id,
           conversationKey: identity.key,
           conversationKind: identity.kind,
           sourceMessageId: message.discordMessageId,
           authorId: message.authorId,
-          prompt
+          prompt,
+          ...(messageImages.length > 0
+            ? {
+                images: messageImages.map((image) => ({
+                  mimeType: image.contentType,
+                  dataBase64: image.dataBase64
+                }))
+              }
+            : {})
         });
         if (!result.text.trim()) {
           throw new Error("PI returned an empty response");

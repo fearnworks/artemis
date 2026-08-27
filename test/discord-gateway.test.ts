@@ -5,6 +5,9 @@ import type { ConversationService } from "../src/conversation-service.js";
 import type { InboundMessage } from "../src/domain.js";
 import {
   DiscordGateway,
+  IMAGE_INPUT_MAX_BYTES,
+  IMAGE_INPUT_MAX_COUNT,
+  collectImageAttachments,
   createTypingIndicator,
   fetchEntireThread,
   formatUptime,
@@ -46,11 +49,26 @@ function fakeMessage(overrides: Record<string, unknown> = {}): Message {
     createdTimestamp: Date.parse("2026-08-19T00:00:00.000Z"),
     guildId: null,
     channelId: "channel",
+    attachments: new Collection(),
     mentions: { parsedUsers: new Collection(), roles: new Collection(), repliedUser: null },
     channel,
     reply: vi.fn().mockResolvedValue(undefined),
     ...overrides
   } as unknown as Message;
+}
+
+function imageAttachment(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "attachment-1",
+    url: "https://cdn.discordapp.com/attachments/image.png",
+    contentType: "image/png",
+    size: 3,
+    ...overrides
+  };
+}
+
+function imageFetch(body: BodyInit = new Uint8Array([1, 2, 3]).buffer as ArrayBuffer) {
+  return vi.fn().mockImplementation(async () => new Response(body, { status: 200 }));
 }
 
 describe("Discord helpers", () => {
@@ -265,6 +283,97 @@ describe("Discord helpers", () => {
       discordMessageId: "message",
       channelId: "channel"
     });
+  });
+});
+
+describe("collectImageAttachments", () => {
+  it("downloads image attachments as base64 payloads", async () => {
+    const fetchMock = imageFetch();
+    const message = fakeMessage({
+      attachments: new Collection([
+        ["attachment-1", imageAttachment()],
+        ["attachment-2", imageAttachment({
+          id: "attachment-2",
+          contentType: "image/jpeg",
+          url: "https://cdn.discordapp.com/attachments/image.jpg"
+        })]
+      ])
+    });
+
+    const images = await collectImageAttachments(message, fetchMock);
+
+    expect(images).toHaveLength(2);
+    expect(images[0]).toMatchObject({
+      id: "attachment-1",
+      url: "https://cdn.discordapp.com/attachments/image.png",
+      contentType: "image/png",
+      byteSize: 3,
+      dataBase64: Buffer.from([1, 2, 3]).toString("base64")
+    });
+    expect(images[1]).toMatchObject({ id: "attachment-2", contentType: "image/jpeg" });
+    expect(fetchMock).toHaveBeenCalledWith("https://cdn.discordapp.com/attachments/image.png");
+  });
+
+  it("ignores non-image attachments without downloading them", async () => {
+    const fetchMock = imageFetch();
+    const message = fakeMessage({
+      attachments: new Collection([
+        ["file", imageAttachment({ contentType: "text/plain", size: 100 })]
+      ])
+    });
+
+    await expect(collectImageAttachments(message, fetchMock)).resolves.toEqual([]);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects unsupported image content types", async () => {
+    const message = fakeMessage({
+      attachments: new Collection([["file", imageAttachment({ contentType: "image/svg+xml" })]])
+    });
+
+    await expect(collectImageAttachments(message, imageFetch())).rejects.toThrow(
+      "Unsupported image attachment content type: image/svg+xml"
+    );
+  });
+
+  it("rejects more image attachments than the per-message limit", async () => {
+    const entries: [string, ReturnType<typeof imageAttachment>][] = Array.from(
+      { length: IMAGE_INPUT_MAX_COUNT + 1 },
+      (_, index) => [`attachment-${index}`, imageAttachment({ id: `attachment-${index}` })]
+    );
+    const message = fakeMessage({ attachments: new Collection(entries) });
+
+    await expect(collectImageAttachments(message, imageFetch())).rejects.toThrow(
+      `Too many image attachments: limit is ${IMAGE_INPUT_MAX_COUNT}`
+    );
+  });
+
+  it("rejects declared and downloaded sizes above the byte limit", async () => {
+    const declared = fakeMessage({
+      attachments: new Collection([["file", imageAttachment({ size: IMAGE_INPUT_MAX_BYTES + 1 })]])
+    });
+    await expect(collectImageAttachments(declared, imageFetch())).rejects.toThrow(
+      `Image attachment exceeds the ${IMAGE_INPUT_MAX_BYTES} byte limit`
+    );
+
+    const oversizedBody = new Uint8Array(IMAGE_INPUT_MAX_BYTES + 1).buffer as ArrayBuffer;
+    const downloaded = fakeMessage({
+      attachments: new Collection([["file", imageAttachment({ size: 1 })]])
+    });
+    await expect(collectImageAttachments(downloaded, imageFetch(oversizedBody))).rejects.toThrow(
+      `Image attachment exceeds the ${IMAGE_INPUT_MAX_BYTES} byte limit`
+    );
+  });
+
+  it("rejects failed attachment downloads", async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => new Response("gone", { status: 404 }));
+    const message = fakeMessage({
+      attachments: new Collection([["file", imageAttachment()]])
+    });
+
+    await expect(collectImageAttachments(message, fetchMock)).rejects.toThrow(
+      "Image attachment download failed with status 404"
+    );
   });
 });
 
@@ -516,6 +625,81 @@ describe("DiscordGateway", () => {
       "discord_message_received",
       expect.objectContaining({ discordMessageId: "dm-message", guildId: null })
     );
+  });
+
+  it("offers image downloads only when image input is enabled while auditing attachments always", async () => {
+    const conversations = {
+      handleMessage: vi.fn().mockResolvedValue(null),
+      logMessage: vi.fn()
+    };
+    const logger = createLoggerMock();
+    const options = {
+      token: "token",
+      channelIds: ["channel"],
+      userIds: ["user"],
+      imageInput: true,
+      fetchImplementation: imageFetch()
+    };
+    const gateway = new DiscordGateway(
+      options,
+      conversations as unknown as ConversationService,
+      logger,
+      new FakeClient() as unknown as Client
+    );
+    const message = fakeMessage({
+      content: "look at this",
+      attachments: new Collection([["file", imageAttachment({ size: 3 })]])
+    });
+
+    await gateway.handleMessage(message);
+
+    const inbound = vi.mocked(conversations.handleMessage).mock.calls[0]?.[0] as InboundMessage;
+    await expect(inbound.images?.()).resolves.toHaveLength(1);
+    expect(logger.audit).toHaveBeenCalledWith(
+      "discord_message_received",
+      expect.objectContaining({
+        imageAttachments: [
+          { id: "attachment-1", contentType: "image/png", size: 3 }
+        ]
+      })
+    );
+
+    const disabled = new DiscordGateway(
+      { token: "token", channelIds: ["channel"], userIds: ["user"], fetchImplementation: imageFetch() },
+      conversations as unknown as ConversationService,
+      createLoggerMock(),
+      new FakeClient() as unknown as Client
+    );
+    await disabled.handleMessage(fakeMessage({
+      attachments: new Collection([["file", imageAttachment()]])
+    }));
+    const disabledInbound = vi.mocked(conversations.handleMessage).mock.calls[1]?.[0] as InboundMessage;
+    expect(disabledInbound.images).toBeUndefined();
+  });
+
+  it("does not offer image downloads for messages without image attachments", async () => {
+    const conversations = {
+      handleMessage: vi.fn().mockResolvedValue(null),
+      logMessage: vi.fn()
+    };
+    const fetchMock = imageFetch();
+    const gateway = new DiscordGateway(
+      { token: "token", channelIds: ["channel"], userIds: ["user"], imageInput: true, fetchImplementation: fetchMock },
+      conversations as unknown as ConversationService,
+      createLoggerMock(),
+      new FakeClient() as unknown as Client
+    );
+
+    await gateway.handleMessage(fakeMessage({ content: "no attachments" }));
+    await gateway.handleMessage(fakeMessage({
+      content: "only a document",
+      attachments: new Collection([["file", imageAttachment({ contentType: "text/plain" })]])
+    }));
+
+    for (const call of vi.mocked(conversations.handleMessage).mock.calls) {
+      expect((call[0] as InboundMessage).images).toBeUndefined();
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("persists every incoming message to the history log independently of the response", async () => {

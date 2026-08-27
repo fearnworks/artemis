@@ -6,7 +6,7 @@ import {
   SettingsManager
 } from "@earendil-works/pi-coding-agent";
 import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
-import type { AssistantMessage, ThinkingContent } from "@earendil-works/pi-ai";
+import type { AssistantMessage, ImageContent, ThinkingContent } from "@earendil-works/pi-ai";
 import { DEFAULT_DGRAPH_URL, type ArtemisConfig } from "./config.js";
 import { DgraphClient, GraphMemory } from "./dgraph-memory.js";
 import type {
@@ -298,7 +298,16 @@ export class PiSdkGateway implements PiGateway {
         : { thinkingLevel: this.config.model.reasoningEffort })
     });
     try {
-      await session.prompt(input.prompt, { expandPromptTemplates: false, source: "rpc" });
+      const images = (input.images ?? []).map((image): ImageContent => ({
+        type: "image",
+        data: image.dataBase64,
+        mimeType: image.mimeType
+      }));
+      await session.prompt(input.prompt, {
+        expandPromptTemplates: false,
+        source: "rpc",
+        ...(images.length > 0 ? { images } : {})
+      });
       const response = [...session.messages]
         .reverse()
         .find((message): message is AssistantMessage => message.role === "assistant");
@@ -350,7 +359,7 @@ export class PiSdkGateway implements PiGateway {
           name: modelConfig.modelId,
           reasoning: modelConfig.reasoning,
           thinkingLevelMap,
-          input: ["text"],
+          input: modelConfig.supportsImageInput ? ["text", "image"] : ["text"],
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
           contextWindow: modelConfig.contextWindow,
           maxTokens: modelConfig.maxTokens,

@@ -284,6 +284,113 @@ describe("ConversationService", () => {
     expect(pi.generate).toHaveBeenCalledOnce();
   });
 
+  it("passes downloaded image attachments to PI with a prompt annotation", async () => {
+    const { service, pi } = createService(createPiMock({ text: "Nice picture" }));
+    const images = [
+      {
+        id: "attachment-1",
+        url: "https://cdn.discordapp.com/attachments/image.png",
+        contentType: "image/png",
+        byteSize: 3,
+        dataBase64: "AAAA"
+      },
+      {
+        id: "attachment-2",
+        url: "https://cdn.discordapp.com/attachments/image.jpg",
+        contentType: "image/jpeg",
+        byteSize: 2,
+        dataBase64: "BB"
+      }
+    ];
+
+    await expect(
+      service.handleMessage(
+        inbound({
+          discordMessageId: "image-message",
+          guildId: "guild-1",
+          channelId: "group-1",
+          mentionsBot: true,
+          content: "what is this?",
+          images: async () => images
+        })
+      )
+    ).resolves.toBe("Nice picture");
+
+    const generation = vi.mocked(pi.generate).mock.calls[0]?.[0];
+    expect(generation?.prompt).toContain(
+      "The newest Discord message includes 2 image attachment(s), provided to you as image content."
+    );
+    expect(generation?.images).toEqual([
+      { mimeType: "image/png", dataBase64: "AAAA" },
+      { mimeType: "image/jpeg", dataBase64: "BB" }
+    ]);
+  });
+
+  it("accepts image-only messages with empty text and annotates thread snapshots", async () => {
+    const { service, pi } = createService(createPiMock({ text: "A red square" }));
+
+    await expect(
+      service.handleMessage(
+        inbound({
+          discordMessageId: "image-only",
+          content: "",
+          images: async () => [
+            {
+              id: "attachment-1",
+              url: "https://cdn.discordapp.com/attachments/image.png",
+              contentType: "image/png",
+              byteSize: 3,
+              dataBase64: "AAAA"
+            }
+          ]
+        })
+      )
+    ).resolves.toBe("A red square");
+    expect(vi.mocked(pi.generate).mock.calls[0]?.[0].prompt).toContain(
+      "includes 1 image attachment(s)"
+    );
+
+    await expect(
+      service.handleMessage(
+        inbound({
+          discordMessageId: "thread-image",
+          guildId: "guild-1",
+          channelId: "group-1",
+          mentionsBot: true,
+          content: "",
+          images: async () => [
+            {
+              id: "attachment-2",
+              url: "https://cdn.discordapp.com/attachments/thread.png",
+              contentType: "image/png",
+              byteSize: 3,
+              dataBase64: "BBBB"
+            }
+          ],
+          loadThread: async () => [
+            inbound({
+              discordMessageId: "thread-image",
+              content: "",
+              role: "user"
+            })
+          ]
+        })
+      )
+    ).resolves.toBe("A red square");
+    const threadPrompt = vi.mocked(pi.generate).mock.calls[1]?.[0].prompt ?? "";
+    expect(threadPrompt).toContain("Respond to the newest message in context.");
+    expect(threadPrompt).toContain("includes 1 image attachment(s)");
+    expect(vi.mocked(pi.generate).mock.calls[1]?.[0].images).toEqual([
+      { mimeType: "image/png", dataBase64: "BBBB" }
+    ]);
+  });
+
+  it("still ignores empty messages without image attachments", async () => {
+    const { service, pi } = createService();
+    await expect(service.handleMessage(inbound({ content: " " }))).resolves.toBeNull();
+    expect(pi.generate).not.toHaveBeenCalled();
+  });
+
   it("does not start a response indicator for ignored or duplicate messages", async () => {
     const { service } = createService();
     const ignoredIndicator = { start: vi.fn().mockResolvedValue(undefined), stop: vi.fn() };
