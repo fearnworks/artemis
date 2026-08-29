@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   createAgentSession,
@@ -139,6 +140,43 @@ function createCustomTools(
   ];
 }
 
+/**
+ * Resolve the persona's approved skill names to bundled skill directories for
+ * pi's stock skill loading. The list is curated in the persona profile, so a
+ * missing directory is a deployment defect and fails loudly. Called once at
+ * initialize so a broken deployment fails at boot instead of on the first
+ * message.
+ */
+function personaSkillPaths(persona: PersonaProfile): string[] {
+  return (persona.skills ?? []).map((name) => {
+    const path = join(process.cwd(), "skills", name);
+    if (!existsSync(path)) {
+      throw new Error(`Persona "${persona.id}" declares skill "${name}" but ${path} does not exist`);
+    }
+    return path;
+  });
+}
+
+/**
+ * Assert that pi actually loaded every skill the persona declares. A directory
+ * that exists but holds no valid SKILL.md passes the existence gate above while
+ * pi only warns; the declared list and pi's loaded skill set must agree, so
+ * pi's own Agent Skills validation is the authority for "loadable".
+ */
+function assertPersonaSkillsLoaded(
+  persona: PersonaProfile,
+  loader: Pick<DefaultResourceLoader, "getSkills">
+): void {
+  const loaded = new Set(loader.getSkills().skills.map((skill) => skill.name));
+  for (const name of persona.skills ?? []) {
+    if (!loaded.has(name)) {
+      throw new Error(
+        `Persona "${persona.id}" declares skill "${name}" but pi did not load it; check ${join(process.cwd(), "skills", name, "SKILL.md")}`
+      );
+    }
+  }
+}
+
 function extractGeneration(message: AssistantMessage): PiGenerationResult {
   if (message.stopReason === "error" || message.stopReason === "aborted") {
     throw new Error(message.errorMessage ?? `PI generation stopped: ${message.stopReason}`);
@@ -167,6 +205,7 @@ export class PiSdkGateway implements PiGateway {
   }>();
   private customTools: ReturnType<typeof createCustomTools> = [];
   private botDisplayName: string | undefined;
+  private skillPaths: string[] = [];
   private readonly memory: GraphMemory;
   private readonly knowledge: HsvaiKnowledge;
 
@@ -288,7 +327,7 @@ export class PiSdkGateway implements PiGateway {
     const { session } = await createAgentSession({
       modelRuntime,
       model,
-      tools: customTools.map((tool) => tool.name),
+      tools: [...(this.skillPaths.length > 0 ? ["read"] : []), ...customTools.map((tool) => tool.name)],
       customTools,
       resourceLoader,
       sessionManager: asPiSessionManager(sessionManager),
@@ -337,6 +376,7 @@ export class PiSdkGateway implements PiGateway {
       return;
     }
     this.customTools = createCustomTools(this.config, this.fetchImplementation);
+    this.skillPaths = personaSkillPaths(this.config.persona);
     const credentials = new InMemoryCredentialStore();
     const modelRuntime = await ModelRuntime.create({
       credentials,
@@ -394,6 +434,7 @@ export class PiSdkGateway implements PiGateway {
       noPromptTemplates: true,
       noThemes: true,
       noContextFiles: true,
+      additionalSkillPaths: this.skillPaths,
       systemPrompt: buildSystemPrompt(
         input.conversationKind,
         this.config.persona,
@@ -403,9 +444,14 @@ export class PiSdkGateway implements PiGateway {
       )
     });
     await resourceLoader.reload();
+    assertPersonaSkillsLoaded(this.config.persona, resourceLoader);
     this.resourceLoaders.set(cacheKey, { hsvaiCorpusRevision, loader: resourceLoader });
     return resourceLoader;
   }
 }
 
-export const piInternals = { extractGeneration, buildSystemPrompt };
+export const piInternals = {
+  assertPersonaSkillsLoaded,
+  extractGeneration,
+  buildSystemPrompt
+};

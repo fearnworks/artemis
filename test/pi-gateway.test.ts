@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { join } from "node:path";
 import type { AssistantMessage, Usage } from "@earendil-works/pi-ai";
 import type {
   PiGenerationInput,
@@ -50,11 +51,19 @@ vi.mock("@earendil-works/pi-coding-agent", () => ({
   ModelRuntime: { create: mocks.runtimeCreate },
   SettingsManager: { inMemory: vi.fn(() => mocks.settings) },
   DefaultResourceLoader: class DefaultResourceLoader {
-    public constructor(options: unknown) {
+    public constructor(public options: unknown) {
       mocks.resourceLoaderConstructor(options);
     }
 
     public reload = mocks.loaderReload;
+
+    public getSkills() {
+      const paths = (this.options as { additionalSkillPaths?: string[] }).additionalSkillPaths ?? [];
+      return {
+        skills: paths.map((path) => ({ name: path.split("/").pop() })),
+        diagnostics: []
+      };
+    }
   }
 }));
 
@@ -776,5 +785,98 @@ describe("system prompt Discord channel limits", () => {
       | undefined;
     expect(secondOptions?.systemPrompt).toContain("Your name is KIPP");
     expect(secondOptions?.systemPrompt).not.toContain("Your name is Artemis");
+  });
+});
+
+describe("persona skills", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.runtime.getModel.mockReturnValue({ provider: "test-provider", id: "model" });
+    mocks.runtime.setRuntimeApiKey.mockResolvedValue(undefined);
+    mocks.runtimeCreate.mockResolvedValue(mocks.runtime);
+    mocks.loaderReload.mockResolvedValue(undefined);
+    mocks.hsvaiCorpusRevision.mockResolvedValue("revision-1");
+    mocks.session.prompt.mockResolvedValue(undefined);
+    mocks.session.messages = [assistant()];
+    mocks.createAgentSession.mockResolvedValue({ session: mocks.session, extensionsResult: {} });
+  });
+
+  function lastLoaderOptions(): {
+    systemPrompt?: string;
+    additionalSkillPaths?: string[];
+  } {
+    const options = mocks.resourceLoaderConstructor.mock.calls.at(-1)?.[0] as
+      | { systemPrompt?: string; additionalSkillPaths?: string[] }
+      | undefined;
+    if (!options?.systemPrompt) {
+      throw new Error("DefaultResourceLoader was not constructed with a system prompt");
+    }
+    return options;
+  }
+
+  it("feeds the wartermis skill list to pi's stock skill loading and enables read", async () => {
+    const gateway = new PiSdkGateway(
+      {
+        model: modelConfig({ baseUrl: "http://inference/v1", modelId: "model" }),
+        persona: WARTERMIS_PROFILE
+      },
+      createSessionStore(),
+      vi.fn()
+    );
+    await gateway.generate(generationInput());
+    const options = lastLoaderOptions();
+    expect(options.additionalSkillPaths).toEqual([join(process.cwd(), "skills", "asd-ste100")]);
+    expect(mocks.createAgentSession).toHaveBeenCalledWith(expect.objectContaining({
+      tools: expect.arrayContaining(["read"])
+    }));
+  });
+
+  it("passes no skill paths and no read tool for a persona without skills", async () => {
+    const gateway = new PiSdkGateway(
+      artemisGatewayConfig(modelConfig({ baseUrl: "http://inference/v1", modelId: "model" })),
+      createSessionStore(),
+      vi.fn()
+    );
+    await gateway.generate(generationInput());
+    expect(lastLoaderOptions().additionalSkillPaths).toEqual([]);
+    expect(mocks.createAgentSession).toHaveBeenCalledWith(expect.objectContaining({
+      tools: expect.not.arrayContaining(["read"])
+    }));
+  });
+
+  it("fails generation loudly when a persona skill directory is missing", async () => {
+    const gateway = new PiSdkGateway(
+      {
+        model: modelConfig({ baseUrl: "http://inference/v1", modelId: "model" }),
+        persona: {
+          id: "wartermis",
+          name: "Wartermis",
+          skills: ["absent-skill"],
+          instructions: "Be brief."
+        } satisfies PersonaProfile
+      },
+      createSessionStore(),
+      vi.fn()
+    );
+    await expect(gateway.generate(generationInput())).rejects.toThrow(
+      'Persona "wartermis" declares skill "absent-skill"'
+    );
+    expect(mocks.createAgentSession).not.toHaveBeenCalled();
+  });
+
+  it("asserts pi loaded every declared skill after the loader reloads", () => {
+    type SkillsLoader = Parameters<typeof piInternals.assertPersonaSkillsLoaded>[1];
+    const loaderWith = (names: string[]): SkillsLoader =>
+      ({ getSkills: () => ({ skills: names.map((name) => ({ name })), diagnostics: [] }) }) as unknown as SkillsLoader;
+    const persona: PersonaProfile = {
+      id: "wartermis",
+      name: "Wartermis",
+      skills: ["asd-ste100"],
+      instructions: "Be brief."
+    };
+    expect(() => piInternals.assertPersonaSkillsLoaded(persona, loaderWith(["asd-ste100"]))).not.toThrow();
+    expect(() => piInternals.assertPersonaSkillsLoaded(persona, loaderWith([]))).toThrow(
+      'Persona "wartermis" declares skill "asd-ste100" but pi did not load it'
+    );
   });
 });
