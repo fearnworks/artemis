@@ -14,6 +14,7 @@ This directory is the authoritative design record for Artemis. Start with the ba
 - [Configurable model provider](model-provider.md) — local model configuration, PI provider registration, startup validation, provider-independent web fetch, and Compose topology.
 - [Image input](image-input.md) — optional flag-gated Discord image-attachment intake, validation limits, and PI image-content delivery.
 - [Persona profiles](persona-profile.md) — optional deployment-owned identity and style instructions composed with Artemis's fixed system rules.
+- [Persona skills](persona-skills.md) — curated per-persona bundled skills loaded through PI's stock skill machinery with on-demand `read` delivery.
 - [Graph memory](memory.md) — explicit, conversation-scoped PI memory tools backed by persistent Dgraph facts.
 - [Dgraph access control and namespaces](dgraph-access-control.md) — ACL bootstrap, namespace isolation, service accounts, JWT clients, and migration boundaries.
 - [HSVAI GraphRAG](hsvai-graphrag.md) — source-grounded retrieval over Huntsville AI transcripts and calendar events.

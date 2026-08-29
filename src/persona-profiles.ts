@@ -6,6 +6,13 @@ export interface PersonaProfile {
   id: string;
   name: string;
   instructions: string;
+  /**
+   * Exact names of bundled skills (directories under `skills/`) approved for
+   * this persona. Omitted for personas without skills. The names are resolved
+   * and loaded by `personaSkillPaths` and `assertPersonaSkillsLoaded` in
+   * pi-gateway.ts; see design/persona-skills.md for the full contract.
+   */
+  skills?: readonly string[];
 }
 
 /**
